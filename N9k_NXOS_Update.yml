@@ -1,0 +1,179 @@
+---
+- name: N9k NXOS Upgrade
+  hosts: n9k_upgrade
+  vars:
+    ansible_connection: network_cli
+    ansible_network_os: nxos
+    #upgrade_image: should be set in inventory 
+  
+  tasks:
+
+### Pre Upgrade checks ###
+      - name: Deciding the NXOS will be upgraded
+        debug:
+          msg: "Current NXOS image {{ ansible_net_image }} will be upgraded to bootflash:{{ upgrade_image }}"
+        when: ansible_net_image != "bootflash:{{ upgrade_image }}"
+
+      - name: Deciding the NXOS will not be upgraded
+        debug:
+          msg: "Current NXOS image is up to date. Upgrade is being skipped for this host. Terminating connection."
+        when: ansible_net_image == "bootflash:{{ upgrade_image }}"
+        
+      - name: End play for this host because it is already up to date. 
+        meta: end_host
+        when: ansible_net_image == "bootflash:{{ upgrade_image }}"
+      
+      - name: Verify {{ upgrade_image }} is in bootflash
+        nxos_command:
+          commands:
+          - command: dir
+          wait_for:
+          - result[0] contains {{ upgrade_image }}
+
+      - name: Reading 'show ip route' ouput
+        cli_command:
+          command: show ip route
+        register: ip_route_pre
+
+      - name: Reading 'show interface status' ouput
+        cli_command:
+          command: show interface status
+        register: interaface_status_pre
+
+      - name: Reading 'show module' ouput
+        cli_command:
+          command: show module
+        register: module_status_pre
+
+
+    ### first step of preferred method of diff_check saves pre upgade output to localhost ###
+
+      - name: Save 'show ip route' output for post upgrade comparison
+        copy:
+          content: "{{ ip_route_pre.stdout }}"
+          dest: "{{ inventory_hostname }}_route-precheck"
+
+      - name: Copying 'show interface status' ouput to local file
+        copy:
+          content: "{{ interaface_status_pre.stdout }}"
+          dest: "{{ inventory_hostname }}_interface-status-precheck"
+
+      - name: Copying 'show module' ouput to local file
+        copy:
+          content: "{{ module_status_pre.stdout }}"
+          dest: "{{ inventory_hostname }}_module-status-precheck"
+    
+    ###
+
+### Upgrade procedures ###
+      - name: The Ansible nxos_install module will now install {{ upgrade_image }}
+        check_mode: no
+        nxos_install_os:
+          sysytem_image_file: "{{ upgrade_image }}"
+          issu: "{{ issu_opt }}"
+
+      - name: reset the connection
+        meta: reset_connection
+      - name: wait for network device to come back up 
+        wait_for_connection:
+          delay: 120
+          connect_timeout: 1200
+
+### Will fail if the device comes back online without RADIUS (may need to consider using local creds)
+
+### Post Upgrade checks ###
+- name: Post Upgrade checks
+  hosts: n9k_upgrade
+  vars:
+    ansible_connection: network_cli
+    ansible_network_os: nxos
+  tasks:
+
+      - name: Checking NXOS version Success
+        debug:
+          msg: "Upgrade Success!!!! Currently running {{ ansible_net_image }}"
+        when: ansible_net_image == "bootflash:{{ upgrade_image }}" 
+
+      - name: Checking NXOS version Fail
+        debug:
+          msg: "Upgrade Failed!!!! Currently running {{ ansible_net_image }}"
+        when: ansible_net_image != "bootflash:{{ upgrade_image }}"
+
+    ## wait for route establishment, protocol negotiation ##
+
+      - name: reset the connection
+        meta: reset_connection
+      - name: give some time routes and protocols to establish 
+        wait_for_connection:
+          delay: 180
+
+    ##
+
+      - name: Reading 'show ip route' ouput
+        cli_command:
+          command: show ip route
+        register: ip_route_post
+
+      - name: Reading 'show interface status' ouput
+        cli_command:
+          command: show interface status
+        register: interaface_status_post
+
+      - name: Reading 'show module' ouput
+        cli_command:
+          command: show module
+        register: module_status_post
+
+    ### option for diff check that only is a pass/fail and provides no context ###
+
+      #- name: IP route Check 
+      #  debug:
+      #    msg: "The pre and post routes do not match, check routing on the device"
+      #  when: ip_route_pre != ip_route_post
+
+      #- name: Interface status Check 
+      #  debug:
+      #    msg: "The pre and post routes do not match, check routing on the device"
+      #  when: ip_interaface_status_pre != ip_interaface_status_post
+
+    ###
+
+    ### second step of preferred method of diff_check saves post upgrade output to localhost then compares to pre upgrade file ###
+
+      - name: Copying 'show ip route' ouput to local file
+        copy:
+          content: "{{ ip_route_post.stdout }}"
+          dest: "{{ inventory_hostname }}_route-postcheck"
+
+      - name: Copying 'show interface status' ouput to local file
+        copy:
+          content: "{{ interaface_status_post.stdout }}"
+          dest: "{{ inventory_hostname }}_interface-status-postcheck"
+
+      - name: Copying 'show module' ouput to local file
+        copy:
+          content: "{{ module_status_post.stdout }}"
+          dest: "{{ inventory_hostname }}_module-status-postcheck"
+
+      - name: Comparing pre and post routes 
+        copy:
+          src: "{{ inventory_hostname }}_route-postcheck"
+          dest: "{{ inventory_hostname }}_route-precheck"
+        check_mode: yes
+        diff: yes
+
+      - name: Comparing pre and post interface status
+        copy:
+          src: "{{ inventory_hostname }}_interface-status-postcheck"
+          dest: "{{ inventory_hostname }}_interface-status-precheck"
+        check_mode: yes
+        diff: yes
+
+      - name: Comparing pre and post module status
+        copy:
+          src: "{{ inventory_hostname }}_module-status-postcheck"
+          dest: "{{ inventory_hostname }}_module-status-precheck"
+        check_mode: yes
+        diff: yes
+
+    ###

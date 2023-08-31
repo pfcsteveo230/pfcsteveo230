@@ -1,0 +1,59 @@
+---
+- name: IOS device file transfers
+  hosts: ios
+  ignore_errors: true
+  tasks:
+
+  ## Display system information for reference in case a conditional triggers abort. ##
+
+  - name: This device has {{ ansible_net_system }} version {{ ansible_net_version }}
+    debug:
+      var: ansible_net_version
+  - name: This device has {{ansible_net_filesystems_info['bootflash:'].spacefree_kb|int}}kb free memory. {{ file_size }}kb is required }}.
+    debug:
+      var: ansible_net_filesystems_info
+
+  ## Transfer and Verify only if there is enough space and not already on the same version ##
+
+  - name: transfer IOS image {{ file }}
+    cisco.ios.ios_command:
+      commands:
+      - command: copy {{ xfer_prot }}://{{ username }}{{ file_serv }}/{{ file }} bootflash:{{ file }}
+        prompt: 'Destination filename [{{ file }}]?'
+        answer: "\r"
+      wait_for:
+      - result[0] contains OK
+    when:
+      - ansible_net_filesystems_info['bootflash:'].spacefree_kb|int > file_size|int
+      - ansible_net_version != new_version
+    vars:
+      ansible_command_timeout: 10800
+
+  - name: verify IOS image
+    cisco.ios.ios_command:
+      commands:
+      - command: verify bootflash:{{ file }}
+      wait_for:
+      - result[0] contains verified
+    when:
+      - ansible_net_filesystems_info['bootflash:'].spacefree_kb|int > file_size|int
+      - ansible_net_version != new_version
+    vars:
+      ansible_command_timeout: 600
+
+  ## Copy to secondary file system if the variable was set to y (skips devices the command fails on) ##
+
+  - name: copy to slaveboot
+    cisco.ios.ios_command:
+      commands:
+      - command: copy bootflash:{{ file }} {{ filesys__secondary_name }}:{{ file }}
+        prompt: Destination filename [{{ file }}]?
+        answer: "\r"
+      wait_for:
+      - result[0] contains copied
+    when:
+      - ansible_net_filesystems_info['bootflash:'].spacefree_kb|int > file_size|int
+      - ansible_net_version != new_version
+      - filesys_secondary == "y"
+    vars:
+      ansible_command_timeout: 1500

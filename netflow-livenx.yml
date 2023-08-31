@@ -1,0 +1,20 @@
+---
+- name: LiveNx_Netflow
+  hosts: ios, nxos
+  gather_facts: no
+  ignore_errors: yes
+  roles:
+    - role: anp.netflow
+      vars:
+            flow_record_name: LiveNx
+            flow_exporter_name: LiveNx_Exp
+            flow_monitor_name: LiveNx_Mon
+            collector_address: 10.5.32.222
+            collector_port: 2055
+            ## the variables below are defined in the inventory
+            #netflow_source: loopback0
+            #mgt_vrf: 
+            #netflow_l3_interfaces
+            #  - interfacelist
+            #netflow_l2_interfaces
+            #  - interfacelist

@@ -1,0 +1,264 @@
+---
+- name: Cat4k Dual Sup IOS Upgrade
+  hosts: all
+#  vars:
+#    upgrade_image: isr4400-universalk9.17.06.03a.SPA.bin# - should be set in inventory as 4300 and 4400 use different files
+  
+  tasks:
+
+
+### Pre Upgrade checks ###
+      - name: Deciding the IOS will be upgraded
+        ansible.builtin.debug:
+          msg: "Current IOS image {{ ansible_net_image }} will be upgraded to bootflash:{{ upgrade_image }}"
+        when: ansible_net_image != "bootflash:{{ upgrade_image }}"
+
+      - name: Deciding the IOS will not be upgraded
+        ansible.builtin.debug:
+          msg: "Current IOS image is up to date. Upgrade is being skipped for this host. Terminating connection."
+        when: ansible_net_image == "bootflash:{{ upgrade_image }}"
+        
+      - name: End play for this host because it is already up to date. 
+        ansible.builtin.meta: end_host
+        when: ansible_net_image == "bootflash:{{ upgrade_image }}"
+      
+      - name: set Config Register to 0x2102
+        cisco.ios.ios_config:
+          lines:
+            - config-register 0x2102
+          match: exact
+    
+      - name: Verify {{ upgrade_image }} is in bootflash
+        cisco.ios.ios_command:
+          commands:
+          - command: dir
+          wait_for:
+          - result[0] contains {{ upgrade_image }}
+
+      - name: Verify {{ upgrade_image }} is in slave bootflash
+        cisco.ios.ios_command:
+          commands:
+          - command: "dir slavebootflash:"
+          wait_for:
+          - result[0] contains {{ upgrade_image }}
+
+      - name: Reading 'show ip route' ouput
+        cisco.ios.ios_command:
+          commands:
+          - command: show ip route
+        register: ip_route_pre
+
+      - name: Reading 'show ip interface brief' ouput
+        cisco.ios.ios_command:
+          commands:
+          - command: show ip interface brief
+        register: ip_interaface_status_pre
+
+    
+    ### first step of preferred method of diff_check saves pre upgade output to localhost ###
+
+      - name: Save 'show ip route' output for post upgrade comparison
+        ansible.builtin.copy:
+          content: "{{ ip_route_pre.stdout }}"
+          dest: "{{ inventory_hostname }}_route-precheck"
+
+      - name: Copying 'show ip interface brief' ouput to local file
+        ansible.builtin.copy:
+          content: "{{ ip_interaface_status_pre.stdout }}"
+          dest: "{{ inventory_hostname }}_interface-status-precheck"
+
+### Upgrade procedures ###
+
+      - name: Changing Boot System config to new image, with secondary as old image
+        cisco.ios.ios_config:
+          lines:
+            - boot system bootflash:{{ upgrade_image }}
+            - boot system {{ ansible_net_image }}
+          match: exact
+          before:
+            - no boot system
+          save_when: always
+
+      - name: Reloading the Standby Supervisor
+        cisco.ios.ios_command:
+          commands:
+          - command: "redundancy reload peer"
+            check_all: True
+            prompt:
+              - "Reload peer?"
+            answer:
+              - "\r"
+        changed_when: true
+
+## the following task will give a few seconds for the command to execute. Otherwise, Ansible will move on too quickly and see the standby supervisor as up when it hasn't yet rebooted. 
+
+      - name: Wait a couple of seconds for the standby reload to occur
+        ansible.builtin.wait_for:
+          timeout: 15
+
+### First check to ensure standby is online before rebooting primary. Will error and fail if not ##
+
+      - name: show module for the Peer/Standby Supervisor to come back online
+        cisco.ios.ios_command:
+          commands:
+          - command: "show module"
+          interval: 30
+          retries: 24
+          wait_for: result[0] not contains "Disabled"
+        vars:
+          ansible_command_timeout: 720
+
+### Second check to ensure standby is online in SSO mode before rebooting primary. Will error and fail if not. short interval with many retries to expedite the process. ##
+
+      - name: ensure the standby Supervisor is ready to become primary
+        cisco.ios.ios_command:
+          commands:
+          - command: "show redundancy"
+          interval: 15
+          retries: 36
+          wait_for: result[0] contains "Software state = STANDBY HOT"
+        register: show_redundancy_pre
+        vars:
+          ansible_command_timeout: 720
+
+###### Display the stanby status then perform SSO switchover which will reload the primary Sup. #############
+## Using kron script to get around lack of return after command execution.
+
+      - name:  Current Redundnacy Status AND RUNNING VERSIONS
+        ansible.builtin.debug:
+          var: show_redundancy_pre
+          
+## this doesnt work becuase there is no return from the cli after executing the command
+#      - name: redundancy force-switchover
+#        cisco.ios.ios_command:
+#          commands:
+#          - command: "redundancy force-switchover"
+#            prompt: "confirm"
+#            answer: "\r"
+#          wait_for: result[0] contains "Preparing"
+
+      - name: SSO switchover using kron occurence
+        cisco.ios.ios_config:
+          lines:
+          - kron policy-list force-switchover
+          - cli redundancy force-switchover
+          - kron occurrence force-switchover in 1 oneshot
+          - policy-list force-switchover
+        changed_when: true
+      
+      - name: Wait for the kron occurence
+        ansible.builtin.wait_for:
+          timeout: 75
+
+## the SSO switchover will take up to 1 minute, during which time the connection will be lost. 
+
+      - name: reset the connection
+        ansible.builtin.meta: reset_connection
+      - name: wait for network device to come back up 
+        wait_for_connection:
+          delay: 10
+          timeout: 300
+
+## remove the Kron configuration ##
+
+      - name: remove kron policy list
+        cisco.ios.ios_config:
+          lines:
+          - no kron policy-list force-switchover
+          match: exact
+          save_when: always
+
+## The secondary supervisor has become Primary and vis versa
+
+      - name: ensure the original Supervisor is back online
+        cisco.ios.ios_command:
+          commands:
+          - command: "show redundancy"
+          - command: "show mod"
+          interval: 30
+          retries: 24
+          wait_for: 
+            - result[0] contains "Software state = STANDBY HOT"
+            - result[1] not contains "Disabled"
+        vars:
+          ansible_command_timeout: 720
+
+      - name: Display BOTH SUPERVISORS ARE ON NEW CODE
+        cisco.ios.ios_command:
+          commands:
+          - command: "show redundancy"
+        register: show_redundancy_post
+
+      - name:  Current Redundnacy Status AND RUNNING VERSIONS
+        ansible.builtin.debug:
+          var: show_redundancy_post
+
+### Post Upgrade checks ###
+- name: Post Upgrade checks
+  hosts: all
+  gather_facts: true
+  tasks:
+      - name: Checking IOS version Success
+        ansible.builtin.debug:
+          msg: "Upgrade Success!!!! Currently running {{ ansible_net_image }}"
+        when: ansible_net_image == "bootflash:{{ upgrade_image }}"
+
+      - name: Checking IOS version Fail
+        ansible.builtin.debug:
+          msg: "Upgrade Failed!!!! Currently running {{ ansible_net_image }}"
+        when: ansible_net_image != "bootflash:{{ upgrade_image }}"
+        failed_when: true
+
+      - name: Reading 'show ip route' ouput
+        cisco.ios.ios_command:
+          commands:
+          - command: "show ip route"
+        register: ip_route_post
+
+      - name: Reading 'show ip interface brief' ouput
+        cisco.ios.ios_command:
+          commands:
+          - command: "show ip interface brief"
+        register: ip_interaface_status_post
+
+    ### option for diff check that only is a pass/fail and provides no context ###
+
+      #- name: IP route Check 
+      #  ansible.builtin.debug:
+      #    msg: "The pre and post routes do not match, check routing on the device"
+      #  when: ip_route_pre != ip_route_post
+
+      #- name: Interface status Check 
+      #  ansible.builtin.debug:
+      #    msg: "The pre and post routes do not match, check routing on the device"
+      #  when: ip_interaface_status_pre != ip_interaface_status_post
+
+    ###
+
+    ### second step of preferred method of diff_check saves post upgrade output to localhost then compares to pre upgrade file ###
+
+      - name: Copying 'show ip route' ouput to local file
+        ansible.builtin.copy:
+          content: "{{ ip_route_post.stdout }}"
+          dest: "{{ inventory_hostname }}_route-postcheck"
+
+      - name: Copying 'show ip interface brief' ouput to local file
+        ansible.builtin.copy:
+          content: "{{ ip_interaface_status_pre.stdout }}"
+          dest: "{{ inventory_hostname }}_interface-status-postcheck"
+
+      - name: Comparing pre and post routes - no output if routes are unchanged
+        ansible.builtin.copy:
+          src: "{{ inventory_hostname }}_route-postcheck"
+          dest: "{{ inventory_hostname }}_route-precheck"
+        check_mode: yes
+        diff: yes
+
+      - name: Comparing pre and post interface status - route timers will be different
+        ansible.builtin.copy:
+          src: "{{ inventory_hostname }}_interface-status-postcheck"
+          dest: "{{ inventory_hostname }}_interface-status-precheck"
+        check_mode: yes
+        diff: yes
+
+    ###

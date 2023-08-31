@@ -1,0 +1,154 @@
+---
+- name: undebug all 
+  hosts: all
+  gather_facts: false
+## This will use a ubiquitous approach in order to produce a smaller, cleaner playbook. The ansible netcommon cli module will simply input the same ascii text command despite OS. 
+  tasks:
+
+      - name: check if there are current debug options set
+        ansible.netcommon.cli_command:
+          command: show debug
+        register: show_debug
+
+      - name: notify that no debugging is present
+        debug:
+          msg: "Debugging is not enabled, disconnecting."
+        when: '"debugging is on" not in show_debug.stdout'
+
+      - name: End play for host with debugging disabled. 
+        meta: end_host
+        when: '"debugging is on" not in show_debug.stdout'
+
+      - name: print show debug results
+        debug:
+          msg: "{{ show_debug }}"
+        when: '"debugging is on" in show_debug.stdout'
+
+      - name: execute undebug command
+        ansible.netcommon.cli_command:
+          command: undebug all
+        when: '"debugging is on" in show_debug.stdout'
+        changed_when: true
+
+
+## This section is the longer, preferred way of doing it. (not working) 
+#  tasks:
+#### IOS section
+#      - name: check IOS if there are current debug options set
+#        cisco.ios.ios_command:
+#          commands: 
+#          - show debug
+#        register: show_debug
+#        when:
+#        - ansible_network_os == 'cisco.ios.ios'
+#
+#      - name: notify that no IOS debugging is present
+#        debug:
+#          msg: 
+#          - "Debugging is not enabled, disconnecting."
+#        when:
+#        - 'ansible_network_os == "cisco.ios.ios"'
+#        - '"debugging is on" not in show_debug.stdout'
+#
+#      - name: End play for IOS host with debugging disabled. 
+#        meta: end_host
+#        when:
+#        - 'ansible_network_os == "cisco.ios.ios"'
+#        - '"debugging is on" not in show_debug.stdout'
+#
+#      - name: print show debug results
+#        debug:
+#          msg: 
+#          - "{{ show_debug }}"
+#        when:
+#        - 'ansible_network_os == "cisco.ios.ios"'
+#        - '"debugging is on" in show_debug.stdout'
+#
+#      - name: execute IOS undebug command
+#        cisco.ios.ios_command:
+#          commands: 
+#          - undebug all
+#        when:
+#        - 'ansible_network_os == "cisco.ios.ios"'
+#        - '"debugging is on" in show_debug.stdout'
+#        changed_when: true
+#
+#### NXOS Section
+#      - name: check NXOS if there are current debug options set
+#        cisco.nxos.nxos_command:
+#          commands: 
+#          - show debug
+#        register: show_debug
+#        when:
+#        - ansible_network_os == 'cisco.nxos.nxos'
+#
+#      - name: notify that no NXOS debugging is present
+#        debug:
+#          msg: 
+#          - "Debugging is not enabled, disconnecting."
+#        when:
+#        - 'ansible_network_os == "cisco.nxos.nxos"'
+#        - '"debugging is on" not in show_debug.stdout'
+#
+#      - name: End play for NXOS host with debugging disabled. 
+#        meta: end_host
+#        when:
+#        - 'ansible_network_os == "cisco.nxos.nxos"'
+#        - '"debugging is on" not in show_debug.stdout'
+#
+#      - name: print show debug results
+#        debug:
+#          msg: 
+#          - "{{ show_debug }}"
+#        when:
+#        - 'ansible_network_os == "cisco.nxos.nxos"'
+#        - '"debugging is on" in show_debug.stdout'
+#
+#      - name: execute NXOS undebug command
+#        cisco.nxos.nxos_command:
+#          commands: 
+#          - undebug all
+#        when:
+#        - 'ansible_network_os == "cisco.nxos.nxos"'
+#        - '"debugging is on" in show_debug.stdout'
+#        changed_when: true
+#
+#### ASA Section
+#      - name: check ASA if there are current debug options set
+#        cisco.asa.asa_command:
+#          commands: 
+#          - show debug
+#        register: show_debug
+#        when:
+#        - ansible_network_os == 'cisco.asa.asa'
+#
+#      - name: notify that no ASA debugging is present
+#        debug:
+#          msg: 
+#          - "Debugging is not enabled, disconnecting."
+#        when:
+#        - 'ansible_network_os == "cisco.asa.asa"'
+#        - '"debugging is on" not in show_debug.stdout'
+#
+#      - name: End play for ASA host with debugging disabled. 
+#        meta: end_host
+#        when:
+#        - 'ansible_network_os == "cisco.asa.asa"'
+#        - '"debugging is on" not in show_debug.stdout'
+#
+#      - name: print show debug results
+#        debug:
+#          msg: 
+#          - "{{ show_debug }}"
+#        when:
+#        - 'ansible_network_os == "cisco.asa.asa"'
+#        - '"debugging is on" in show_debug.stdout'
+#
+#      - name: execute ASA undebug command
+#        cisco.asa.asa_command:
+#          commands: 
+#          - undebug all
+#        when:
+#        - 'ansible_network_os == "cisco.asa.asa"'
+#        - '"debugging is on" in show_debug.stdout'
+#        changed_when: true

@@ -1,0 +1,10 @@
+---
+# lets test a role
+
+- hosts: all
+  gather_facts: yes
+  vars:
+
+  roles:
+
+      - role: anp.ios-upgrade

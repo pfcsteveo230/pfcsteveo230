@@ -1,0 +1,186 @@
+---
+- name: IOS File transfer
+  hosts: all
+  gather_facts: true
+  tasks:
+
+#### The variables below are being defined in the Inventory groups ending in _upgrade and/or in the Template for the play ####
+
+#xfer_prot: ftp
+#xfer_auth: ftpwrite:writeftp@
+#file_serv: 10.5.32.94
+## Change the upgrade image and File size below ##
+#upgrade_image: cat4500e-universalk9.SPA.03.11.05.E.152-7.E5.bin
+#file_size_kb: 200000
+
+### IOS SECTION ###
+
+  ## Display system information for reference in case a conditional triggers abort. ##
+
+  - name: gather ios facts
+    cisco.ios.ios_facts:
+      gather_subset: all
+    when: ansible_network_os == 'cisco.ios.ios'
+
+  - name: Is the file already in the directory?
+    cisco.ios.ios_command:
+      commands:
+      - dir
+    register: dir_output
+
+  - name: DIR OUTPUT!!
+    debug:
+      msg: "{{ dir_output.stdout_lines }}"
+
+  - name: Notify that play is ending because the device is already running the image to be copied. 
+    debug:
+      msg: "ABORTING TRANSFER. This device already contains {{ upgrade_image }}."
+    when:
+      - ansible_net_image == upgrade_image
+
+  - name: End play for this 9400 host because it is already up to date. 
+    ansible.builtin.meta: end_host
+    when: 
+      - ansible_net_image == "bootflash:{{ upgrade_image }}"
+      - ansible_facts.net_model == "C9407R"
+
+  - name: End play for this 9500 host because it is already up to date. 
+    ansible.builtin.meta: end_host
+    when: 
+      - ansible_net_image == "flash:{{ upgrade_image }}"
+      - ansible_facts.net_model == "C9500-40X"
+
+#### Remove inactive files
+  - name: Remove inactive files
+    cisco.ios.ios_command:
+      commands:
+      - command: install remove inactive
+        prompt: 'Do you want to remove the above files?'
+        answer: "y"
+      wait_for:
+        - result[0] contains SUCCESS
+    vars:
+        ansible_command_timeout: 300
+####
+
+  - name: Not Enough Space 9400
+    debug:
+      msg: "ABORTING TRANSFER. This device has {{ansible_net_filesystems_info['bootflash:'].spacefree_kb|int}}kb free memory. {{ file_size_kb}} is required."
+    when:
+      - ansible_facts.net_model == "C9407R"
+      - ansible_net_filesystems_info['bootflash:'].spacefree_kb|int < file_size_kb|int
+
+  - name: End play for this 9400 host because it doesnt have space. 
+    ansible.builtin.meta: end_host
+    when: 
+      - ansible_facts.net_model == "C9407R"
+      - ansible_net_filesystems_info['bootflash:'].spacefree_kb|int < file_size_kb|int
+
+  - name: Not Enough Space 9500
+    debug:
+      msg: "ABORTING TRANSFER. This device has {{ansible_net_filesystems_info['flash:'].spacefree_kb|int}}kb free memory. {{ file_size_kb}} is required."
+    when:
+      - ansible_facts.net_model == "C9500-40X"
+      - ansible_net_filesystems_info['flash:'].spacefree_kb|int < file_size_kb|int
+
+  - name: End play for this 9500 host because it doesnt have space. 
+    ansible.builtin.meta: end_host
+    when: 
+      - ansible_facts.net_model == "C9500-40X"
+      - ansible_net_filesystems_info['flash:'].spacefree_kb|int < file_size_kb|int
+
+
+  ## Transfer and Verify only if there is enough space and not already on the same version ##
+
+ # - name: Downlaod from Primary
+ #   block: 
+
+  - name: transfer 9400 IOS image {{ upgrade_image }}
+    cisco.ios.ios_command:
+      commands:
+      - command: copy http://{{ file_serv }}/{{ upgrade_image }} bootflash:{{ upgrade_image }}
+        prompt: 'Destination filename [{{ upgrade_image }}]?'
+        answer: "\r"
+      wait_for:
+      - result[0] contains copied
+    when:
+      - ansible_facts.net_model == "C9407R"
+    vars:
+      ansible_command_timeout: 10800
+    changed_when: true
+
+  - name: transfer 9500 IOS image {{ upgrade_image }}
+    cisco.ios.ios_command:
+      commands:
+      - command: copy http://{{ file_serv }}/{{ upgrade_image }} flash:{{ upgrade_image }}
+        prompt: 'Destination filename [{{ upgrade_image }}]?'
+        answer: "\r"
+      wait_for:
+      - result[0] contains copied
+    when:
+      - ansible_facts.net_model == "C9500-40X"
+    vars:
+      ansible_command_timeout: 10800
+    changed_when: true
+
+  - name: verify 9400 IOS image
+    cisco.ios.ios_command:
+      commands:
+      - command: verify bootflash:{{ upgrade_image }}
+      wait_for:
+      - result[0] contains verified
+    when:
+      - ansible_facts.net_model == "C9407R"
+    register: ios_image_verify
+    vars:
+      ansible_command_timeout: 600
+
+  - name: verify 9500 IOS image
+    cisco.ios.ios_command:
+      commands:
+      - command: verify flash:{{ upgrade_image }}
+      wait_for:
+      - result[0] contains verified
+    when:
+      - ansible_facts.net_model == "C9500-40X"
+    register: ios_image_verify
+    vars:
+      ansible_command_timeout: 600
+
+  - name: display verification
+    debug:
+      msg: "{{ ios_image_verify }}"
+    
+#    rescue:
+#
+#    - name: transfer IOS image {{ upgrade_image }}
+#      cisco.ios.ios_command:
+#        commands:
+#        - command: copy http://{{ file_serv |last }}/{{ upgrade_image }} bootflash:{{ upgrade_image }}
+#          prompt: 'Destination filename [{{ upgrade_image }}]?'
+#          answer: "\r"
+#        wait_for:
+#        - result[0] contains copied
+#      when:
+#        - ansible_network_os == 'cisco.ios.ios'
+#      vars:
+#        ansible_command_timeout: 10800
+#      changed_when: true
+#
+#    - name: verify IOS image
+#      cisco.ios.ios_command:
+#        commands:
+#        - command: verify bootflash:{{ upgrade_image }}
+#        wait_for:
+#        - result[0] contains verified
+#      when:
+#        - ansible_network_os == 'cisco.ios.ios'
+#      register: ios_image_verify
+#      vars:
+#        ansible_command_timeout: 600
+#
+#    - name: display verification
+#      debug:
+#        msg: "{{ ios_image_verify }}"
+#      when:
+#        - ansible_network_os == 'cisco.ios.ios'

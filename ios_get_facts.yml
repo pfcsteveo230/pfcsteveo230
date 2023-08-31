@@ -1,0 +1,15 @@
+---
+
+- name: IOS extended Get and show facts.
+  hosts: all
+  gather_facts: false
+  vars:
+  tasks:
+
+  - name: Gather all rescources.
+    cisco.ios.ios_facts:
+      gather_subset: all
+
+  - name: show facts
+    debug:
+      msg: "{{ ansible_facts }}"

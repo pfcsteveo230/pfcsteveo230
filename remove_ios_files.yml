@@ -1,0 +1,89 @@
+---
+- name: Remove A File from IOS
+  hosts: all
+  ignore_errors: true
+## variables below will be set as a survey in the Atower template
+#  vars:
+#    - slave_bootflash: y
+#    - remove_file: cat4500e-universalk9.SPA.03.11.08.E.152-7.E7.bin
+  tasks:
+    - name: delete {{ remove_file }} from IOS bootflash
+      ios_command: 
+        commands:
+        - command: delete bootflash:{{ remove_file }}
+          prompt:
+            - 'Delete filename [{{ remove_file }}]?'
+            - 'Delete bootflash:/{{ remove_file }}? [confirm]'
+          answer:
+            - "\r"
+            - "\r"
+      vars:
+        ansible_command_timeout: 10
+      when:
+        - ansible_network_os == "cisco.ios.ios"
+        - ansible_net_image != remove_file
+      changed_when: true
+
+    - name: Show primary directory contents
+      cisco.ios.ios_command:
+        commands:
+        - dir
+      register: dir_output
+      when:
+        - ansible_network_os == 'cisco.ios.ios'
+
+    - name: Display primary directory contents
+      debug:
+        msg: "{{ dir_output }}"
+      when:
+        - ansible_network_os == 'cisco.ios.ios'
+
+    - name: delete {{ remove_file }} from IOS Slavebootflash
+      ios_command: 
+        commands:
+        - command: delete slavebootflash:{{ remove_file }}
+          prompt:
+            - 'Delete filename [{{ remove_file }}]?'
+            - 'Delete slavebootflash:/{{ remove_file }}? [confirm]'
+          answer:
+            - "\r"
+            - "\r"
+      vars:
+        ansible_command_timeout: 10
+      when:
+        - ansible_network_os == "cisco.ios.ios"
+        - slave_bootflash == "y"
+        - ansible_net_image != remove_file
+      changed_when: true
+
+
+    - name: Show secondary directory contents
+      cisco.ios.ios_command:
+        commands:
+        - "dir slavebootflash:"
+      register: dir_slave_output
+      when:
+        - ansible_network_os == 'cisco.ios.ios'
+        - slave_bootflash == "y"
+
+    - name: Display secondary directory contents
+      debug:
+        msg: "{{ dir_slave_output }}"
+      when:
+        - ansible_network_os == 'cisco.ios.ios'
+        - slave_bootflash == "y"
+
+    
+
+#    - name: delete {{ remove_file }} from NXOS
+#      nxos_command: 
+#        commands:
+#        - command: delete bootflash:{{ remove_file }}
+#          prompt:
+#            - 'Do you want to delete "/{{ remove_file }}" ? (yes/no/abort)   [y]'
+#          answer:
+#            - "\r"
+#      vars:
+#        ansible_command_timeout: 10
+#      when:
+#        - platform_os == "nxos"

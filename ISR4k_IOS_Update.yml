@@ -1,0 +1,177 @@
+---
+- name: ISR4xxx IOS Upgrade
+  hosts: isr_4400_upgrade,isr_4300_upgrade
+  vars:
+ #   ansible_connection: network_cli
+ #   ansible_network_os: ios
+    #upgrade_image: isr4400-universalk9.17.06.03a.SPA.bin# - should be set in inventory as 4300 and 4400 use different files
+  
+  tasks:
+
+### Pre Upgrade checks ###
+      - name: Deciding the IOS will be upgraded
+        debug:
+          msg: "Current IOS image {{ ansible_net_image }} will be upgraded to bootflash:{{ upgrade_image }}"
+        when: ansible_net_image != "bootflash:{{ upgrade_image }}"
+
+      - name: Deciding the IOS will not be upgraded
+        debug:
+          msg: "Current IOS image is up to date. Upgrade is being skipped for this host. Terminating connection."
+        when: ansible_net_image == "bootflash:{{ upgrade_image }}"
+        
+      - name: End play for this host because it is already up to date. 
+        meta: end_host
+        when: ansible_net_image == "bootflash:{{ upgrade_image }}"
+      
+      - name: set Config Register to 0x2102
+        ios_config:
+          commands:
+            - config-register 0x2102
+          match: exact
+    
+      - name: Verify {{ upgrade_image }} is in bootflash
+        ios_command:
+          commands:
+          - command: dir
+          wait_for:
+          - result[0] contains {{ upgrade_image }}
+
+      - name: Reading 'show ip route' ouput
+        cli_command:
+          command: show ip route
+        register: ip_route_pre
+
+      - name: Reading 'show ip interface brief' ouput
+        cli_command:
+          command: show ip interface brief
+        register: ip_interaface_status_pre
+
+    
+    ### first step of preferred method of diff_check saves pre upgade output to localhost ###
+
+      - name: Save 'show ip route' output for post upgrade comparison
+        copy:
+          content: "{{ ip_route_pre.stdout }}"
+          dest: "{{ inventory_hostname }}_route-precheck"
+
+      - name: Copying 'show ip interface brief' ouput to local file
+        copy:
+          content: "{{ ip_interaface_status_pre.stdout }}"
+          dest: "{{ inventory_hostname }}_interface-status-precheck"
+    
+    ###
+
+### Upgrade procedures ###
+
+      - name: Changing Boot System config to new image, with secondary as old image
+        ios_config:
+          parents: boot-start-marker
+          commands:
+            - boot system flash bootflash:{{ upgrade_image }}
+            - boot system flash {{ ansible_net_image }}
+          match: exact
+          before:
+            - no boot system
+          save_when: always
+
+      - name: Reloading the Device
+        cli_command:
+          command: "reload"
+          check_all: True
+          prompt:
+            - "Save?"
+            - "reload?"
+            - "confirm"
+          answer:
+            - 'yes'
+            - 'yes'
+            - 'y'
+
+      - name: reset the connection
+        meta: reset_connection
+      - name: wait for network device to come back up 
+        wait_for_connection:
+          delay: 120
+          connect_timeout: 1200
+
+### Will fail if the divice comes back online without RADIUS (may need to consider using local creds)
+
+### Post Upgrade checks ###
+- name: Post Upgrade checks
+  hosts: isr_4400_upgrade,isr_4300_upgrade
+  vars:
+    ansible_connection: network_cli
+    ansible_network_os: ios
+  tasks:
+
+      - name: Checking IOS version Success
+        debug:
+          msg: "Upgrade Success!!!! Currently running {{ ansible_net_image }}"
+        when: ansible_net_image == "bootflash:{{ upgrade_image }}" 
+
+      - name: Checking IOS version Fail
+        debug:
+          msg: "Upgrade Failed!!!! Currently running {{ ansible_net_image }}"
+        when: ansible_net_image != "bootflash:{{ upgrade_image }}"
+
+    ## wait for route establishment, protocol negotiation ##
+
+      - name: reset the connection
+        meta: reset_connection
+      - name: give some time routes and protocols to establish 
+        wait_for_connection:
+          delay: 180
+
+    ##
+
+      - name: Reading 'show ip route' ouput
+        cli_command:
+          command: show ip route
+        register: ip_route_post
+
+      - name: Reading 'show ip interface brief' ouput
+        cli_command:
+          command: show ip interface brief
+        register: ip_interaface_status_post
+
+    ### option for diff check that only is a pass/fail and provides no context ###
+
+      #- name: IP route Check 
+      #  debug:
+      #    msg: "The pre and post routes do not match, check routing on the device"
+      #  when: ip_route_pre != ip_route_post
+
+      #- name: Interface status Check 
+      #  debug:
+      #    msg: "The pre and post routes do not match, check routing on the device"
+      #  when: ip_interaface_status_pre != ip_interaface_status_post
+
+    ###
+
+    ### second step of preferred method of diff_check saves post upgrade output to localhost then compares to pre upgrade file ###
+
+      - name: Copying 'show ip route' ouput to local file
+        copy:
+          content: "{{ ip_route_post.stdout }}"
+          dest: "{{ inventory_hostname }}_route-postcheck"
+
+      - name: Copying 'show ip interface brief' ouput to local file
+        copy:
+          content: "{{ ip_interaface_status_pre.stdout }}"
+          dest: "{{ inventory_hostname }}_interface-status-postcheck"
+
+      - name: Comparing pre and post routes - no output if routes are unchanged
+        copy:
+          src: "{{ inventory_hostname }}_route-postcheck"
+          dest: "{{ inventory_hostname }}_route-precheck"
+        check_mode: yes
+        diff: yes
+
+      - name: Comparing pre and post interface status - route timers will be different
+        copy:
+          src: "{{ inventory_hostname }}_interface-status-postcheck"
+          dest: "{{ inventory_hostname }}_interface-status-postcheck"
+        check_mode: yes
+        diff: yes
+
+    ###

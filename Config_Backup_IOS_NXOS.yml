@@ -1,0 +1,46 @@
+---
+
+- name: Backup and Save configurations
+  hosts: ios, nxos
+
+  tasks:
+
+      - name: Backup and Save IOS configs
+        ios_config:
+          backup: yes
+          save_when: always
+        when: ansible_network_os == 'cisco.ios.ios'
+
+      - name: Copy to FTP server
+        cisco.ios.ios_command:
+          commands:
+          - command: copy run ftp://ftpwrite:writeftp@10.5.32.94/upload/
+          prompt: 
+          - 'Address of remote host'
+          - 'Destination filename'
+          answer: 
+          - "\r"
+          - "\r"
+          wait_for: result[0] contains copied
+        when:
+        - ansible_network_os == 'cisco.ios.ios'
+
+      - name: Backup and Save IOS configs
+        nxos_config:
+          backup: yes
+          save_when: always
+        when: ansible_network_os == 'cisco.nxos.nxos'
+
+#      - name: Copy to FTP server
+#        cisco.nxos.nxos_command:
+#          commands:
+#          - command: copy run ftp://ftpwrite:writeftp@10.5.32.94/upload/
+#          prompt: 
+#          - 'Address of remote host'
+#          - 'Destination filename'
+#          answer: 
+#          - "\r"
+#          - "\r"
+#          wait_for: result[0] contains copied
+#        when:
+#        - ansible_network_os == 'cisco.nxos.nxos'

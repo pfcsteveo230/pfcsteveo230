@@ -1,0 +1,32 @@
+---
+- name: Access switch DHCP Guard configuration
+  hosts: office_distro_switches
+
+  tasks:
+
+      - name: Enable IPv4 DHCP snooping
+        ios_config:
+          commands:
+            - ip dhcp snooping
+            - ip dhcp snooping vlan 1-4094
+            - no ip dhcp snooping information option
+          match: exact
+          save_when: always
+
+      - name: Enable IPv6 DHCP guard and RAguard
+        ios_config:
+          parents: vlan configuration 1-4094
+          commands:
+            - ipv6 dhcp guard
+            - ipv6 nd raguard
+          match: exact
+          save_when: always
+
+      - name: Trust Interfaces for upstream DHCP servers
+        ios_config:
+          parents: "interface {{ item }}"
+          commands:
+            - ip dhcp snooping trust
+          match: exact
+          save_when: always
+        loop: "{{ switch_trunks }}"

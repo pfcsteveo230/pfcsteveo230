@@ -1,0 +1,33 @@
+---
+
+    # This playbook uses facts to determine interface status via CDP. It then issues the command "default authentication priority" from global config mode. 
+    
+    
+    - name: Default Authentication Priority for Access ports
+      hosts: all
+      gather_facts: true
+      vars:
+      tasks:
+    
+        - name: Gather interface facts.
+          cisco.ios.ios_facts:
+            gather_network_resources: l2_interfaces
+
+        - name: What Interfaces are we going to Change ?
+          debug:
+            msg: "{{ item.name }}"
+          loop: "{{ ansible_facts.network_resources.l2_interfaces }}"
+          when: 
+            - item.mode is defined #filter out odd interfaces like mgnt that have no mode defined
+            - item.mode == "access" #only select access ports
+    
+        - name: Lets change those ports !
+          cisco.ios.ios_config:
+            lines:
+            - default authentication priority
+            parents: 'interface {{item.name}}'
+          when: 
+            - item.mode is defined #filter out odd interfaces like mgnt that have no mode defined
+            - item.mode == "access" #only select access ports
+          loop: "{{ ansible_facts.network_resources.l2_interfaces }}"
+    
